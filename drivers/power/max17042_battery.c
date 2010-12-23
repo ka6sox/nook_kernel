@@ -760,8 +760,6 @@ static int max17042_battery_temperature(struct max17042_data* max17042)
 		}
 	}
 
-//	### Hack to allow froyo boot without tripping temp sensor
-	max17042->temp_cached = 1;	
 	return err;
 }
 
