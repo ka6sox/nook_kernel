@@ -29,19 +29,25 @@
 #include <linux/err.h>
 #include <linux/platform_device.h>
 #include <linux/io.h>
-#include <mach/omap34xx.h>
-#include <mach/control.h>
+#include <asm/arch/omap34xx.h>
+#include <asm/arch/control.h>
 
+#ifdef CONFIG_MACH_OMAP3621_EVT1A
+#define TEMP_SENSOR_SOC BIT(9)
+#define TEMP_SENSOR_EOCZ BIT(8)
+#else
 #define TEMP_SENSOR_SOC BIT(8)
 #define TEMP_SENSOR_EOCZ BIT(7)
+#endif
 
 /* minimum delay for EOCZ rise after SOC rise is
  * 11 cycles of the 32.768Khz clock */
 #define EOCZ_MIN_RISING_DELAY (11 * 30518)
 
 /* maximum delay for EOCZ rise after SOC rise is
- * 14 cycles of the 32.768Khz clock */
-#define EOCZ_MAX_RISING_DELAY (14 * 30518)
+ * 14 cycles of the 32.768Khz clock 
+ * changed to 30 to allow for clock stabilization */
+#define EOCZ_MAX_RISING_DELAY (30 * 30518)
 
 /* minimum delay for EOCZ falling is
  * 36 cycles of the 32.768Khz clock */
@@ -102,37 +108,48 @@ static void omap34xx_update(struct omap34xx_data *data)
 	u32 temp_sensor_reg;
 
 	mutex_lock(&data->update_lock);
+	omap_ctrl_writel(0, OMAP343X_CONTROL_TEMP_SENSOR);
 
-	if (!data->valid
-	    || time_after(jiffies, data->last_updated + HZ)) {
+	
+	if (!data->valid || time_after(jiffies, data->last_updated + (HZ/4))) {
+		int meh;
+		clk_enable(data->clk_32k); 
+		omap_ctrl_writel(0, OMAP343X_CONTROL_TEMP_SENSOR);
+#ifdef CONFIG_MACH_OMAP3621_EVT1A
+		temp_sensor_reg = 0x200;
+#else
+		temp_sensor_reg = 0x100;
+#endif
+		__raw_writel(temp_sensor_reg, 0xd8002524);
 
-		clk_enable(data->clk_32k);
-
-		temp_sensor_reg = omap_ctrl_readl(OMAP343X_CONTROL_TEMP_SENSOR);
-		temp_sensor_reg |= TEMP_SENSOR_SOC;
-		omap_ctrl_writel(temp_sensor_reg, OMAP343X_CONTROL_TEMP_SENSOR);
-
-		if (!wait_for_eocz(EOCZ_MIN_RISING_DELAY,
-					EOCZ_MAX_RISING_DELAY, 1))
+		if (!wait_for_eocz(EOCZ_MIN_RISING_DELAY, EOCZ_MAX_RISING_DELAY, 1))
+		{
+			__raw_writel(0, 0xd8002524);
+			data->valid = 0;
 			goto err;
+		}
 
-		temp_sensor_reg = omap_ctrl_readl(OMAP343X_CONTROL_TEMP_SENSOR);
-		temp_sensor_reg &= ~TEMP_SENSOR_SOC;
-		omap_ctrl_writel(temp_sensor_reg, OMAP343X_CONTROL_TEMP_SENSOR);
+		__raw_writel(0, 0xd8002524);
 
-		if (!wait_for_eocz(EOCZ_MIN_FALLING_DELAY,
-					EOCZ_MAX_FALLING_DELAY, 0))
+		if (!wait_for_eocz(EOCZ_MIN_FALLING_DELAY, EOCZ_MAX_FALLING_DELAY, 0))
+		{
+			data->valid = 0;
 			goto err;
-
+		}
 		data->temp = omap_ctrl_readl(OMAP343X_CONTROL_TEMP_SENSOR) &
+#ifdef CONFIG_MACH_OMAP3621_EVT1A
+						((1<<8) - 1);
+#else
 						((1<<7) - 1);
+#endif
 		data->last_updated = jiffies;
 		data->valid = 1;
 
 err:
-		clk_disable(data->clk_32k);
+		//clk_disable(data->clk_32k); //caused adc to hang after first read durring early testing, might be able to re-enable with no ill effects.
+		meh = 1; //needed to appease the compiler, original statement above
 	}
-
+	
 	mutex_unlock(&data->update_lock);
 }
 
